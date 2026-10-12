@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>팔랑팔랑 나비 플래피</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #e8d9ff; }
+  body {
+    font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+    user-select: none;
+  }
+  /* 게임 화면은 창 크기에 맞춰 꽉 차게 */
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  /* 시작 화면, 게임 오버 화면 */
+  .panel {
+    position: fixed; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(86vw, 360px);
+    padding: 26px 20px 24px;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.88);
+    border: 4px solid #d9b8ff;
+    border-radius: 28px;
+    box-shadow: 0 8px 0 #c9a3f5, 0 16px 40px rgba(160, 120, 220, 0.3);
+    color: #7a5aa6;
+  }
+  .panel.hidden { display: none; }
+  h1 { margin: 0 0 10px; font-size: clamp(28px, 7vw, 40px); line-height: 1.2; color: #ff7fb8; text-shadow: 3px 3px 0 #fff0f8, 4px 4px 0 #d9b8ff; }
+  h2 { margin: 0 0 14px; font-size: clamp(28px, 7vw, 38px); color: #ff7fb8; text-shadow: 3px 3px 0 #d9b8ff; }
+  p { margin: 0 0 18px; font-size: 16px; line-height: 1.6; }
+  .key { display: inline-block; padding: 1px 10px; border: 2px solid #b59ae0; border-radius: 8px; background: #fff; font-weight: bold; }
+  .scores { display: flex; justify-content: center; gap: 14px; margin-bottom: 14px; }
+  .scores div { background: #f6efff; border-radius: 16px; padding: 8px 18px; font-size: 15px; }
+  .scores b { display: block; font-size: 32px; color: #8a5cd6; }
+  #newBest { color: #ff7fb8; font-weight: bold; font-size: 18px; margin-bottom: 14px; }
+  #newBest.hidden { display: none; }
+  button {
+    font-family: inherit; font-size: 22px; font-weight: bold;
+    padding: 12px 34px;
+    color: #fff; background: #ff8fc4;
+    border: none; border-radius: 999px;
+    box-shadow: 0 5px 0 #e0609e;
+    cursor: pointer;
+  }
+  button:hover { background: #ffa3cf; }
+  button:active { transform: translateY(4px); box-shadow: 0 1px 0 #e0609e; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="titlePanel" class="panel">
+  <h1>팔랑팔랑<br>나비 플래피</h1>
+  <p><span class="key">스페이스바</span>를 누르면 날갯짓!<br>파리지옥 사이로 쏙쏙 지나가요<br><span class="key">P</span> 일시정지</p>
+  <button id="startBtn">시작하기</button>
+</div>
+
+<div id="overPanel" class="panel hidden">
+  <h2>게임 오버</h2>
+  <div class="scores">
+    <div>점수<b id="scoreTxt">0</b></div>
+    <div>최고 점수<b id="bestTxt">0</b></div>
+  </div>
+  <div id="newBest" class="hidden">🎉 새 기록!</div>
+  <button id="retryBtn">다시 하기</button>
+</div>
+
+<script>
+// ===== 기본 설정 =====
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const titlePanel = document.getElementById('titlePanel');
+const overPanel = document.getElementById('overPanel');
+
+// 게임 세상의 높이는 항상 600으로 정하고, 화면 크기에 맞춰 늘리거나 줄여서 그림
+const VH = 600;
+const GROUND_H = 70;                 // 바닥 높이
+const GROUND_Y = VH - GROUND_H;
+const GAP = 175;                     // 위아래 파리지옥 사이 틈
+const SPACING = 270;                 // 파리지옥끼리의 가로 간격
+const SPEED = 2.6;                   // 화면이 흘러가는 빠르기
+const GRAVITY = 0.36;                // 아래로 떨어지는 힘 (나비라서 살짝 가볍게)
+const FLAP = -6.8;                   // 날갯짓 한 번에 올라가는 힘
+const MAX_FALL = 7.5;                // 떨어지는 최대 빠르기
+const BR = 13;                       // 나비가 부딪히는 범위 (반지름)
+const HEAD_W = 72, HEAD_H = 70, STEM_W = 20; // 파리지옥이 부딪히는 범위
+
+let VW = 800, scale = 1, dpr = 1;    // VW: 게임 세상의 가로 길이 (창 모양에 따라 바뀜)
+let state = 'title';                 // title(처음), play(하는 중), dying(떨어지는 중), over(게임 오버)
+let score = 0, frame = 0, flash = 0, groundX = 0, canRetry = false;
+let paused = false;                  // 일시정지 중인지
+let prevGroundX = 0;
+let best = 0;
+try { best = Number(localStorage.getItem('butterflyBest')) || 0; } catch (e) {}
+let pipes = [], parts = [], clouds = [];
+
+const bird = { x: 150, y: VH * 0.45, vy: 0, rot: 0, phase: 0 };
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// ===== 화면 크기 자동 조절 =====
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(innerWidth * dpr);
+  cv.height = Math.round(innerHeight * dpr);
+  scale = innerHeight / VH;
+  VW = innerWidth / scale;
+  bird.x = clamp(VW * 0.28, 90, 260);
+  if (clouds.length === 0) makeClouds();
+}
+addEventListener('resize', resize);
+
+// 구름 만들기 (뒤쪽 구름은 작고 느리게, 앞쪽 구름은 크고 빠르게)
+function makeClouds() {
+  clouds = [];
+  const layers = [
+    { n: 9, y: [40, 300], s: [0.5, 0.8], speed: 0.15, color: '#fbeaff' },
+    { n: 7, y: [80, 380], s: [0.8, 1.1], speed: 0.35, color: '#ffffff' },
+    { n: 5, y: [300, 480], s: [1.1, 1.5], speed: 0.6, color: '#ffffff' },
+  ];
+  const span = Math.max(VW, 800) + 400;
+  layers.forEach((L, li) => {
+    for (let i = 0; i < L.n; i++) {
+      const puffs = [];
+      const count = 4 + Math.floor(Math.random() * 3);
+      for (let k = 0; k < count; k++) puffs.push([k * 18 - count * 9 + rand(-4, 4), rand(-10, 4), rand(14, 24)]);
+      clouds.push({ x: rand(-200, span), y: rand(L.y[0], L.y[1]), s: rand(L.s[0], L.s[1]), speed: L.speed, color: L.color, layer: li, puffs });
+    }
+  });
+}
+
+// ===== 소리 (소리 파일 없이 브라우저가 직접 만듦) =====
+let ac = null;
+function audio() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (ac && ac.state === 'suspended') ac.resume();
+}
+function beep(f, dur, type, vol, f2, delay = 0) {
+  if (!ac) return;
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f, t);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(ac.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+const sfx = {
+  flap:  () => beep(520, 0.12, 'sine', 0.08, 820),                                   // 파닥
+  score: () => { beep(880, 0.1, 'triangle', 0.08); beep(1320, 0.15, 'triangle', 0.08, null, 0.08); }, // 띵동
+  hit:   () => beep(180, 0.25, 'square', 0.08, 60),                                  // 쿵
+  over:  () => [523, 440, 349, 262].forEach((f, i) => beep(f, 0.2, 'triangle', 0.08, null, 0.25 + i * 0.15)),
+};
+
+// ===== 게임 흐름 =====
+function start() {
+  if (state === 'play') return;
+  audio();
+  state = 'play';
+  paused = false;
+  score = 0;
+  pipes = [];
+  parts = [];
+  bird.y = VH * 0.42;
+  bird.vy = 0;
+  bird.rot = 0;
+  titlePanel.classList.add('hidden');
+  overPanel.classList.add('hidden');
+  document.activeElement.blur();
+  pipes.push(newPipe(bird.x + 420, VH * 0.45));
+  flap();
+}
+
+function newPipe(x, prevGap) {
+  // 틈 위치는 랜덤, 단 바로 앞 틈과 너무 멀지 않게
+  const minY = 60 + GAP / 2, maxY = GROUND_Y - 50 - GAP / 2;
+  const gapY = clamp(prevGap + rand(-170, 170), minY, maxY);
+  return { x, gapY, passed: false, seed: Math.random() * 10 };
+}
+
+function flap() {
+  bird.vy = FLAP;
+  sfx.flap();
+}
+
+function die() {
+  state = 'dying';
+  bird.vy = -4;
+  flash = 10;
+  sfx.hit();
+}
+
+function showOver() {
+  state = 'over';
+  canRetry = false;
+  const isNew = score > best;
+  if (isNew) {
+    best = score;
+    try { localStorage.setItem('butterflyBest', best); } catch (e) {}
+  }
+  document.getElementById('scoreTxt').textContent = score;
+  document.getElementById('bestTxt').textContent = best;
+  document.getElementById('newBest').classList.toggle('hidden', !isNew);
+  sfx.over();
+  setTimeout(() => { overPanel.classList.remove('hidden'); }, 400);
+  setTimeout(() => { canRetry = true; }, 700);  // 실수로 바로 다시 시작되지 않게 잠깐 기다림
+}
+
+// ===== 조작 =====
+function action() {
+  audio();
+  if (paused) return;   // 멈춘 동안에는 날갯짓 안 함
+  if (state === 'title') start();
+  else if (state === 'play') flap();
+  else if (state === 'over' && canRetry) start();
+}
+addEventListener('keydown', e => {
+  // P: 일시정지 / 다시 시작 (게임하는 중에만)
+  if (e.code === 'KeyP' && state === 'play' && !e.repeat) {
+    paused = !paused;
+    return;
+  }
+  if (e.code !== 'Space') return;
+  e.preventDefault();
+  if (!e.repeat) action();
+});
+cv.addEventListener('pointerdown', () => { if (state === 'play' && !paused) flap(); }); // 터치/클릭도 가능
+// 다른 창을 보러 가면 자동으로 일시정지
+addEventListener('blur', () => { if (state === 'play') paused = true; });
+document.getElementById('startBtn').addEventListener('click', start);
+document.getElementById('retryBtn').addEventListener('click', () => { if (canRetry) start(); });
+
+// ===== 움직임 계산 =====
+// 움직이기 전 위치를 기억해 둠 (그릴 때 이전 위치와 지금 위치 사이를 부드럽게 이어 주려고)
+function savePrev() {
+  bird.prevY = bird.y;
+  bird.prevRot = bird.rot;
+  prevGroundX = groundX;
+  for (const p of pipes) p.prevX = p.x;
+  for (const c of clouds) c.prevX = c.x;
+}
+
+function update() {
+  savePrev();
+  if (paused) return;   // 멈춘 동안에는 아무것도 안 움직임
+  frame++;
+  if (flash > 0) flash--;
+
+  // 구름은 항상 흘러감 (게임 중엔 더 빨리)
+  const cloudSpeed = state === 'play' ? 1 : 0.4;
+  for (const c of clouds) {
+    c.x -= c.speed * cloudSpeed;
+    if (c.x < -150) c.x = Math.max(VW, 800) + rand(50, 250);
+  }
+  for (const p of parts) { p.x += p.vx; p.y += p.vy; p.life--; }
+  parts = parts.filter(p => p.life > 0);
+
+  if (state === 'title') {
+    // 처음 화면에서는 둥실둥실 떠 있음
+    bird.y = VH * 0.45 + Math.sin(frame * 0.05) * 12;
+    bird.phase += 0.2;
+    bird.rot = 0;
+    return;
+  }
+
+  if (state === 'play') {
+    groundX += SPEED;
+    bird.vy = Math.min(bird.vy + GRAVITY, MAX_FALL);
+    bird.y += bird.vy;
+    bird.phase += bird.vy < 0 ? 0.6 : 0.25;          // 올라갈 때 날개를 더 빨리 파닥
+    // 기울기는 한 번에 바뀌지 않고 조금씩 따라감
+    const targetRot = clamp(bird.vy * 0.045, -0.3, 0.45);
+    bird.rot += (targetRot - bird.rot) * 0.15;
+    if (bird.y < -30) { bird.y = -30; bird.vy = 0; }
+
+    // 파리지옥 움직이기, 새로 만들기
+    for (const p of pipes) p.x -= SPEED;
+    pipes = pipes.filter(p => p.x > -100);
+    while (pipes[pipes.length - 1].x < VW + 100) {
+      const last = pipes[pipes.length - 1];
+      pipes.push(newPipe(last.x + SPACING, last.gapY));
+    }
+
+    // 지나가면 1점
+    for (const p of pipes) {
+      if (!p.passed && p.x < bird.x) {
+        p.passed = true;
+        score++;
+        sfx.score();
+      }
+    }
+
+    // 반짝이 꼬리
+    if (frame % 3 === 0) {
+      parts.push({ x: bird.x - 8, y: bird.y + rand(-6, 6), vx: -SPEED * 0.6, vy: rand(-0.3, 0.3), life: 30, color: ['#ffb6da', '#c9b5ff', '#fff3a8', '#b5f0ff'][frame % 4] });
+    }
+
+    // 부딪혔는지 확인
+    if (pipes.some(hitPipe)) die();
+    else if (bird.y + BR >= GROUND_Y) { bird.y = GROUND_Y - BR; die(); }
+  } else if (state === 'dying') {
+    // 바닥까지 떨어짐
+    bird.vy = Math.min(bird.vy + GRAVITY, MAX_FALL);
+    bird.y += bird.vy;
+    bird.rot = Math.min(bird.rot + 0.08, 1.4);
+    if (bird.y + BR >= GROUND_Y) { bird.y = GROUND_Y - BR; showOver(); }
+  }
+}
+
+// 동그라미(나비)와 네모(파리지옥)가 겹쳤는지
+function circleRect(cx, cy, r, x, y, w, h) {
+  const nx = clamp(cx, x, x + w), ny = clamp(cy, y, y + h);
+  return (cx - nx) ** 2 + (cy - ny) ** 2 < r * r;
+}
+function hitPipe(p) {
+  const top = p.gapY - GAP / 2, bot = p.gapY + GAP / 2;
+  return circleRect(bird.x, bird.y, BR, p.x - HEAD_W / 2, top - HEAD_H, HEAD_W, HEAD_H)       // 위쪽 머리
+      || circleRect(bird.x, bird.y, BR, p.x - STEM_W / 2, -1000, STEM_W, top - HEAD_H + 1000) // 위쪽 줄기
+      || circleRect(bird.x, bird.y, BR, p.x - HEAD_W / 2, bot, HEAD_W, HEAD_H)                // 아래쪽 머리
+      || circleRect(bird.x, bird.y, BR, p.x - STEM_W / 2, bot + HEAD_H, STEM_W, 1000);        // 아래쪽 줄기
+}
+
+// ===== 그리기 도우미 =====
+function oval(x, y, rx, ry, fill, stroke, rot = 0) {
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+}
+const circle = (x, y, r, fill, stroke) => oval(x, y, r, r, fill, stroke);
+
+// ===== 그리기 =====
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  g.addColorStop(0, '#bfe3ff');    // 하늘색
+  g.addColorStop(0.5, '#e6d9ff');  // 연보라
+  g.addColorStop(1, '#ffe0ef');    // 연분홍
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, VW, VH);
+
+  // 반짝이는 작은 별
+  for (let i = 0; i < 20; i++) {
+    const x = (i * 137.5) % VW, y = (i * 71) % 260 + 20;
+    const a = 0.3 + 0.3 * Math.sin(frame * 0.05 + i);
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.fillRect(x, y, 2, 2);
+  }
+}
+
+function drawCloud(c) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.scale(c.s, c.s);
+  // 아래쪽 그림자 먼저, 그다음 하얀 구름
+  for (const [dx, dy, r] of c.puffs) circle(dx, dy + 5, r, 'rgba(200,170,240,0.35)');
+  for (const [dx, dy, r] of c.puffs) circle(dx, dy, r, c.color);
+  ctx.restore();
+}
+
+// 귀여운 파리지옥. dir = 1이면 아래에서 위로 입을 벌리고, -1이면 위에서 아래로
+function drawPlant(p, mouthY, dir) {
+  const cx = p.x;
+  const LINE = '#4a9e6a', GREEN = '#8fe0a6', LIGHT = '#b8f0c6';
+  ctx.lineWidth = 2;
+  ctx.save();
+  ctx.translate(cx, mouthY);
+  ctx.scale(1, dir);
+
+  // 줄기와 잎사귀
+  const stemLen = (dir === 1 ? GROUND_Y - mouthY : mouthY) + 20;
+  ctx.fillStyle = '#7fd99a';
+  ctx.fillRect(-11, 50, 22, stemLen);
+  ctx.strokeStyle = LINE;
+  ctx.strokeRect(-11, 50, 22, stemLen);
+  ctx.fillStyle = LIGHT;
+  ctx.fillRect(-6, 52, 4, stemLen);
+  for (let y = 100, side = 1; y < stemLen; y += 70, side = -side) {
+    oval(side * 20, y, 14, 6, GREEN, LINE, side * -0.5);
+  }
+
+  // 입 (양쪽 잎이 천천히 오물오물)
+  const open = 0.42 + Math.sin(frame * 0.06 + p.seed) * 0.1;
+  for (const s of [-1, 1]) {
+    ctx.save();
+    ctx.translate(0, 46);
+    ctx.scale(s, 1);
+    ctx.rotate(-open);
+    oval(0, -26, 17, 27, GREEN, LINE);
+    oval(6, -25, 9, 20, '#ffaac8');                  // 분홍색 입 안쪽
+    for (let k = 0; k < 6; k++) {                    // 동글동글 하얀 이빨
+      const t = -1.25 + k * 0.33;
+      circle(19 * Math.cos(t), -26 + 29 * Math.sin(t), 2.6, '#ffffff', LINE);
+    }
+    ctx.restore();
+  }
+  oval(0, 58, 22, 15, GREEN, LINE);                  // 동그란 얼굴
+  ctx.restore();
+
+  // 얼굴 (위쪽 파리지옥도 얼굴은 똑바로 보이게)
+  const fy = mouthY + dir * 58;
+  ctx.lineWidth = 1.5;
+  oval(cx - 8, fy - 1, 2.6, 3.4, '#3d2f4f');
+  oval(cx + 8, fy - 1, 2.6, 3.4, '#3d2f4f');
+  circle(cx - 7, fy - 2.5, 1, '#fff');
+  circle(cx + 9, fy - 2.5, 1, '#fff');
+  oval(cx - 14, fy + 4, 4, 2.4, 'rgba(255,140,180,0.6)');
+  oval(cx + 14, fy + 4, 4, 2.4, 'rgba(255,140,180,0.6)');
+  ctx.beginPath();
+  ctx.arc(cx, fy + 3, 3, 0.2, Math.PI - 0.2);
+  ctx.strokeStyle = '#3d2f4f';
+  ctx.stroke();
+}
+
+function drawGround(gx) {
+  ctx.fillStyle = '#c8f2d2';
+  ctx.fillRect(0, GROUND_Y, VW, GROUND_H);
+  // 몽글몽글 풀 언덕 (흘러감)
+  const off = gx % 40;
+  for (let x = -off - 40; x < VW + 40; x += 40) circle(x + 20, GROUND_Y + 4, 22, '#a8e8bc');
+  ctx.fillStyle = '#a8e8bc';
+  ctx.fillRect(0, GROUND_Y + 4, VW, 12);
+  // 작은 꽃
+  const off2 = gx % 90;
+  const flowerColors = ['#ffb6da', '#fff3a8', '#c9b5ff'];
+  for (let x = -off2 - 90, i = Math.floor(gx / 90); x < VW + 90; x += 90, i++) {
+    const fx = x + 30, fy = GROUND_Y + 38;
+    const col = flowerColors[((i % 3) + 3) % 3];
+    for (let k = 0; k < 5; k++) {
+      const a = k * Math.PI * 2 / 5;
+      circle(fx + Math.cos(a) * 4, fy + Math.sin(a) * 4, 3.2, col);
+    }
+    circle(fx, fy, 2.5, '#ffd36e');
+  }
+}
+
+// 나비 그리기
+function drawButterfly(x, y, rot, phase, dead) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.lineWidth = 1.5;
+
+  // 날개 (파닥파닥 접혔다 펴졌다)
+  const f = dead ? 0.3 : 0.35 + 0.65 * Math.abs(Math.cos(phase));
+  for (const s of [-1, 1]) {
+    ctx.save();
+    ctx.scale(s * f, 1);
+    oval(12, -8, 14, 10, '#ffb6da', '#c06a9c', -0.5);   // 위 날개
+    oval(15, -10, 4.5, 3.5, '#fff3a8', null, -0.5);
+    circle(8, -4, 2, '#ffffff');
+    oval(9, 7, 8.5, 7, '#c9b5ff', '#8c70c8', 0.5);      // 아래 날개
+    circle(10, 8, 2.2, '#ffffff');
+    ctx.restore();
+  }
+
+  // 더듬이
+  ctx.strokeStyle = '#6b4a8a';
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(s * 2, -17);
+    ctx.quadraticCurveTo(s * 3, -26, s * 9, -27);
+    ctx.stroke();
+    circle(s * 9, -27, 2.4, '#ff8fc0');
+  }
+
+  // 몸통과 머리
+  ctx.beginPath();
+  ctx.roundRect(-3.5, -8, 7, 22, 3.5);
+  ctx.fillStyle = '#7a58a0';
+  ctx.fill();
+  circle(0, -12, 7.5, '#8a68b4', '#6b4a8a');
+
+  // 얼굴
+  if (dead) {   // x x 눈
+    ctx.strokeStyle = '#fff';
+    for (const ex of [-3, 3]) {
+      ctx.beginPath();
+      ctx.moveTo(ex - 1.6, -14.6); ctx.lineTo(ex + 1.6, -11.4);
+      ctx.moveTo(ex + 1.6, -14.6); ctx.lineTo(ex - 1.6, -11.4);
+      ctx.stroke();
+    }
+  } else {
+    circle(-3, -13, 1.8, '#2a1d3a'); circle(3, -13, 1.8, '#2a1d3a');
+    circle(-2.4, -13.7, 0.7, '#fff'); circle(3.6, -13.7, 0.7, '#fff');
+    oval(-5, -9.5, 1.8, 1.1, 'rgba(255,150,190,0.8)');
+    oval(5, -9.5, 1.8, 1.1, 'rgba(255,150,190,0.8)');
+    ctx.beginPath();
+    ctx.arc(0, -10.5, 1.6, 0.2, Math.PI - 0.2);
+    ctx.strokeStyle = '#2a1d3a';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawScore() {
+  ctx.font = "bold 54px 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#b07ad0';
+  ctx.strokeText(score, VW / 2, 24);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(score, VW / 2, 24);
+}
+
+// t: 지난 계산과 다음 계산 사이 어디쯤인지 (0~1)
+function draw(t) {
+  // 이전 위치(a)와 지금 위치(b) 사이를 t만큼 이어 줌
+  const mix = (a, b) => (a === undefined ? b : a + (b - a) * t);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+  drawSky();
+  for (const c of clouds) {
+    // 화면 끝에서 반대쪽으로 넘어간 구름은 이어 주지 않음
+    const x = Math.abs(c.x - c.prevX) > 50 ? c.x : mix(c.prevX, c.x);
+    drawCloud({ ...c, x });
+  }
+  for (const p of pipes) {
+    const plant = { ...p, x: mix(p.prevX, p.x) };
+    drawPlant(plant, p.gapY - GAP / 2, -1);  // 위쪽 파리지옥
+    drawPlant(plant, p.gapY + GAP / 2, 1);   // 아래쪽 파리지옥
+  }
+  drawGround(mix(prevGroundX, groundX));
+
+  for (const p of parts) {
+    ctx.globalAlpha = p.life / 30;
+    circle(p.x, p.y, 2.5, p.color);
+  }
+  ctx.globalAlpha = 1;
+
+  drawButterfly(bird.x, mix(bird.prevY, bird.y), mix(bird.prevRot, bird.rot), bird.phase, state === 'dying' || state === 'over');
+  if (state !== 'title') drawScore();
+
+  // 부딪히면 화면이 하얗게 번쩍
+  if (flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${flash / 12})`;
+    ctx.fillRect(0, 0, VW, VH);
+  }
+
+  if (paused) drawPause();
+}
+
+// 일시정지 화면
+function drawPause() {
+  ctx.fillStyle = 'rgba(120, 90, 170, 0.35)';
+  ctx.fillRect(0, 0, VW, VH);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.font = "bold 46px 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#b07ad0';
+  ctx.strokeText('일시정지', VW / 2, VH / 2 - 16);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('일시정지', VW / 2, VH / 2 - 16);
+  ctx.font = "bold 18px 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+  ctx.lineWidth = 5;
+  ctx.strokeText('P를 누르면 다시 시작해요', VW / 2, VH / 2 + 28);
+  ctx.fillText('P를 누르면 다시 시작해요', VW / 2, VH / 2 + 28);
+}
+
+// ===== 게임 반복 (어떤 모니터에서도 1초에 60번 계산) =====
+resize();
+let last = performance.now(), acc = 0;
+function loop(now) {
+  acc += Math.min(100, now - last);
+  last = now;
+  while (acc >= 1000 / 60) { update(); acc -= 1000 / 60; }
+  draw(acc / (1000 / 60));
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
