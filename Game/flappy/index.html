@@ -53,7 +53,7 @@
 
 <div id="titlePanel" class="panel">
   <h1>팔랑팔랑<br>나비 플래피</h1>
-  <p><span class="key">스페이스바</span>를 누르면 날갯짓!<br>파리지옥 사이로 쏙쏙 지나가요<br><span class="key">P</span> 일시정지</p>
+  <p><span class="key">스페이스바</span>를 누르면 날갯짓!<br>파리지옥 사이로 쏙쏙 지나가요<br>붕붕 날아오는 벌을 잡으면 +2점!<br><span class="key">P</span> 일시정지</p>
   <button id="startBtn">시작하기</button>
 </div>
 
@@ -94,7 +94,8 @@ let paused = false;                  // 일시정지 중인지
 let prevGroundX = 0;
 let best = 0;
 try { best = Number(localStorage.getItem('butterflyBest')) || 0; } catch (e) {}
-let pipes = [], parts = [], clouds = [];
+let pipes = [], parts = [], clouds = [], bees = [];
+let beeTimer = 0;                    // 다음 벌이 날아올 때까지 남은 시간
 
 const bird = { x: 150, y: VH * 0.45, vy: 0, rot: 0, phase: 0 };
 
@@ -152,6 +153,7 @@ function beep(f, dur, type, vol, f2, delay = 0) {
 const sfx = {
   flap:  () => beep(520, 0.12, 'sine', 0.08, 820),                                   // 파닥
   score: () => { beep(880, 0.1, 'triangle', 0.08); beep(1320, 0.15, 'triangle', 0.08, null, 0.08); }, // 띵동
+  bee:   () => [988, 1175, 1568].forEach((f, i) => beep(f, 0.12, 'triangle', 0.08, null, i * 0.07)), // 띠리링
   hit:   () => beep(180, 0.25, 'square', 0.08, 60),                                  // 쿵
   over:  () => [523, 440, 349, 262].forEach((f, i) => beep(f, 0.2, 'triangle', 0.08, null, 0.25 + i * 0.15)),
 };
@@ -165,6 +167,8 @@ function start() {
   score = 0;
   pipes = [];
   parts = [];
+  bees = [];
+  beeTimer = 300;
   bird.y = VH * 0.42;
   bird.vy = 0;
   bird.rot = 0;
@@ -242,6 +246,7 @@ function savePrev() {
   prevGroundX = groundX;
   for (const p of pipes) p.prevX = p.x;
   for (const c of clouds) c.prevX = c.x;
+  for (const b of bees) { b.prevX = b.x; b.prevY = b.y; }
 }
 
 function update() {
@@ -299,6 +304,31 @@ function update() {
       parts.push({ x: bird.x - 8, y: bird.y + rand(-6, 6), vx: -SPEED * 0.6, vy: rand(-0.3, 0.3), life: 30, color: ['#ffb6da', '#c9b5ff', '#fff3a8', '#b5f0ff'][frame % 4] });
     }
 
+    // 작은 벌이 가끔 오른쪽에서 붕붕 날아옴
+    if (--beeTimer <= 0) {
+      const baseY = rand(90, GROUND_Y - 90);
+      bees.push({ x: VW + 40, y: baseY, baseY, t: Math.random() * 6 });
+      beeTimer = rand(240, 420);
+    }
+    for (const b of bees) {
+      b.t += 0.06;
+      b.x -= SPEED + 1.3;                              // 화면보다 조금 더 빠르게
+      b.y = b.baseY + Math.sin(b.t) * 28;              // 위아래로 살랑살랑
+    }
+    // 벌을 잡으면 2점 + 반짝이 팡!
+    for (const b of bees) {
+      if (!b.caught && hitBee(b)) {
+        b.caught = true;
+        score += 2;
+        sfx.bee();
+        for (let k = 0; k < 12; k++) {
+          const a = k * Math.PI * 2 / 12;
+          parts.push({ x: b.x, y: b.y, vx: Math.cos(a) * 2.2, vy: Math.sin(a) * 2.2, life: 30, color: ['#ffd84d', '#ffb6da', '#fff3a8'][k % 3] });
+        }
+      }
+    }
+    bees = bees.filter(b => b.x > -60 && !b.caught);
+
     // 부딪혔는지 확인
     if (pipes.some(hitPipe)) die();
     else if (bird.y + BR >= GROUND_Y) { bird.y = GROUND_Y - BR; die(); }
@@ -322,6 +352,11 @@ function hitPipe(p) {
       || circleRect(bird.x, bird.y, BR, p.x - STEM_W / 2, -1000, STEM_W, top - HEAD_H + 1000) // 위쪽 줄기
       || circleRect(bird.x, bird.y, BR, p.x - HEAD_W / 2, bot, HEAD_W, HEAD_H)                // 아래쪽 머리
       || circleRect(bird.x, bird.y, BR, p.x - STEM_W / 2, bot + HEAD_H, STEM_W, 1000);        // 아래쪽 줄기
+}
+
+// 벌을 잡았는지 (나비와 벌이 닿았는지)
+function hitBee(b) {
+  return (bird.x - b.x) ** 2 + (bird.y - b.y) ** 2 < (BR + 8) ** 2;
 }
 
 // ===== 그리기 도우미 =====
@@ -380,6 +415,13 @@ function drawPlant(p, mouthY, dir) {
   ctx.fillRect(-6, 52, 4, stemLen);
   for (let y = 100, side = 1; y < stemLen; y += 70, side = -side) {
     oval(side * 20, y, 14, 6, GREEN, LINE, side * -0.5);
+    oval(side * 18, y - 1.5, 6, 2, LIGHT, null, side * -0.5);   // 잎사귀 반짝
+    // 잎 끝에 작은 하트 (위쪽 파리지옥도 하트는 똑바로)
+    ctx.save();
+    ctx.translate(side * 34, y + 6);
+    ctx.scale(1, dir);
+    heart(0, 0, 4.5, '#ffaac8');
+    ctx.restore();
   }
 
   // 입 (양쪽 잎이 천천히 오물오물)
@@ -391,6 +433,7 @@ function drawPlant(p, mouthY, dir) {
     ctx.rotate(-open);
     oval(0, -26, 17, 27, GREEN, LINE);
     oval(6, -25, 9, 20, '#ffaac8');                  // 분홍색 입 안쪽
+    oval(-6, -36, 3.5, 8, 'rgba(255,255,255,0.6)', null, 0.2); // 반짝이는 볼록 부분
     for (let k = 0; k < 6; k++) {                    // 동글동글 하얀 이빨
       const t = -1.25 + k * 0.33;
       circle(19 * Math.cos(t), -26 + 29 * Math.sin(t), 2.6, '#ffffff', LINE);
@@ -403,16 +446,93 @@ function drawPlant(p, mouthY, dir) {
   // 얼굴 (위쪽 파리지옥도 얼굴은 똑바로 보이게)
   const fy = mouthY + dir * 58;
   ctx.lineWidth = 1.5;
-  oval(cx - 8, fy - 1, 2.6, 3.4, '#3d2f4f');
-  oval(cx + 8, fy - 1, 2.6, 3.4, '#3d2f4f');
-  circle(cx - 7, fy - 2.5, 1, '#fff');
-  circle(cx + 9, fy - 2.5, 1, '#fff');
-  oval(cx - 14, fy + 4, 4, 2.4, 'rgba(255,140,180,0.6)');
-  oval(cx + 14, fy + 4, 4, 2.4, 'rgba(255,140,180,0.6)');
-  ctx.beginPath();
-  ctx.arc(cx, fy + 3, 3, 0.2, Math.PI - 0.2);
   ctx.strokeStyle = '#3d2f4f';
+  const blink = (frame + Math.floor(p.seed * 40)) % 220 < 8;   // 가끔 눈을 깜빡
+  for (const s of [-1, 1]) {
+    const ex = cx + s * 8;
+    if (blink) {
+      ctx.beginPath();
+      ctx.arc(ex, fy - 2, 3.2, 0.3, Math.PI - 0.3);
+      ctx.stroke();
+    } else {
+      oval(ex, fy - 1, 3.8, 4.8, '#3d2f4f');           // 크고 동그란 눈
+      circle(ex + 1.3, fy - 2.8, 1.6, '#fff');         // 큰 반짝이
+      circle(ex - 1.2, fy + 1, 0.8, '#fff');           // 작은 반짝이
+    }
+  }
+  oval(cx - 15, fy + 5, 4.5, 2.6, 'rgba(255,130,175,0.7)');   // 발그레 볼
+  oval(cx + 15, fy + 5, 4.5, 2.6, 'rgba(255,130,175,0.7)');
+  // 고양이 입 모양 ω
+  ctx.beginPath();
+  ctx.arc(cx - 2.2, fy + 4, 2.2, 0.1, Math.PI - 0.3);
+  ctx.moveTo(cx + 4.4, fy + 4);
+  ctx.arc(cx + 2.2, fy + 4, 2.2, 0.3, Math.PI - 0.1);
   ctx.stroke();
+  // 머리에 꽂은 작은 꽃 핀
+  const px = cx + 15, py = fy - dir * 11;
+  for (let k = 0; k < 5; k++) {
+    const a = k * Math.PI * 2 / 5 + 0.3;
+    circle(px + Math.cos(a) * 3.6, py + Math.sin(a) * 3.6, 3, '#ffb6da');
+  }
+  circle(px, py, 2.4, '#fff3a8');
+}
+
+// 작은 하트
+function heart(x, y, r, fill) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + r);
+  ctx.bezierCurveTo(x - r * 1.6, y - r * 0.2, x - r * 0.7, y - r * 1.4, x, y - r * 0.5);
+  ctx.bezierCurveTo(x + r * 0.7, y - r * 1.4, x + r * 1.6, y - r * 0.2, x, y + r);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+// 작은 벌 그리기 (왼쪽을 보고 날아감)
+function drawBee(x, y, t) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.sin(t) * 0.15);
+  ctx.lineWidth = 1.3;
+  // 날개 (빠르게 파닥파닥)
+  const w = 0.5 + 0.5 * Math.abs(Math.sin(frame * 0.8));
+  ctx.globalAlpha = 0.8;
+  oval(-1, -9, 5, 7 * w + 2, '#eaf8ff', '#9cc8e0', -0.3);
+  oval(5, -8, 4, 6 * w + 2, '#eaf8ff', '#9cc8e0', 0.3);
+  ctx.globalAlpha = 1;
+  // 몸통 + 줄무늬
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 11, 8, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffd84d';
+  ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = '#5a4030';
+  ctx.fillRect(1, -10, 3.5, 20);
+  ctx.fillRect(7, -10, 3.5, 20);
+  ctx.restore();
+  oval(0, 0, 11, 8, null, '#c99a1e');
+  // 꼬리 침
+  ctx.beginPath();
+  ctx.moveTo(10.5, -1.5); ctx.lineTo(15, 0); ctx.lineTo(10.5, 1.5);
+  ctx.fillStyle = '#5a4030';
+  ctx.fill();
+  // 더듬이
+  ctx.strokeStyle = '#5a4030';
+  ctx.beginPath();
+  ctx.moveTo(-7, -5); ctx.quadraticCurveTo(-10, -12, -13, -12);
+  ctx.moveTo(-4, -6); ctx.quadraticCurveTo(-5, -13, -8, -14);
+  ctx.stroke();
+  circle(-13, -12, 1.5, '#5a4030');
+  circle(-8, -14, 1.5, '#5a4030');
+  // 얼굴
+  circle(-5, -1, 1.8, '#2a1d3a');
+  circle(-4.4, -1.6, 0.7, '#fff');
+  oval(-6, 3, 2, 1.2, 'rgba(255,130,175,0.8)');
+  ctx.beginPath();
+  ctx.arc(-8.5, 1.5, 1.5, 0.3, Math.PI - 0.3);
+  ctx.strokeStyle = '#2a1d3a';
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawGround(gx) {
@@ -526,6 +646,7 @@ function draw(t) {
     drawPlant(plant, p.gapY + GAP / 2, 1);   // 아래쪽 파리지옥
   }
   drawGround(mix(prevGroundX, groundX));
+  for (const b of bees) drawBee(mix(b.prevX, b.x), mix(b.prevY, b.y), b.t);
 
   for (const p of parts) {
     ctx.globalAlpha = p.life / 30;
