@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>게임 모음</title>
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 16px;
+    box-sizing: border-box;
+    font-family: sans-serif;
+    background: #1e2233;
+    color: #fff;
+  }
+  h1 { margin: 0; }
+  .games {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+  }
+  a {
+    display: block;
+    width: 220px;
+    padding: 24px 16px;
+    border-radius: 16px;
+    background: #2f3550;
+    color: #fff;
+    text-decoration: none;
+    text-align: center;
+    font-size: 20px;
+    transition: transform 0.15s, background 0.15s;
+  }
+  a:hover { transform: translateY(-4px); background: #414a6e; }
+  .emoji { font-size: 48px; display: block; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <h1>게임 모음</h1>
+  <div class="games">
+    <a href="Game/breakout/"><span class="emoji">🧱</span>흰 족제비 벽돌깨기</a>
+    <a href="Game/flappy/"><span class="emoji">🦋</span>팔랑팔랑 나비 플래피</a>
+  </div>
+</body>
+</html>
